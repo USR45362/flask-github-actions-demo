@@ -17,4 +17,4 @@ def test_multiply_route(client):
     """Test that our math logic works via the API."""
     response = client.get('/multiply/5/4')
     assert response.status_code == 200
-    assert response.json['result'] == 200  # <--- intentional bug for you to watch fail first!
+    assert response.json['result'] == 20
