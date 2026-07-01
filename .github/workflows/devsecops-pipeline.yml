@@ -86,6 +86,7 @@ jobs:
       with:
         context: .
         push: false # Do not push to registry until container scanning passes!
+        load: true
         tags: ghcr.io/${{ env.IMAGE_NAME }}:pipeline-test
         cache-from: type=gha
         cache-to: type=gha,mode=max
