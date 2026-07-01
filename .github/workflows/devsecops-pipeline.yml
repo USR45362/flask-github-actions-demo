@@ -125,6 +125,13 @@ jobs:
     name: Dynamic App Security Testing (DAST)
     needs: build-and-package-scan # Guardrail: Block if container has CVEs
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+      issues: write      # <--- ADD THIS LINE so ZAP can log bugs!
+      security-events: write
+    
     steps:
     - name: Checkout repository code
       uses: actions/checkout@v4
