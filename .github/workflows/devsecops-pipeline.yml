@@ -154,7 +154,7 @@ jobs:
 
     # --- Phase 4: Attack the live target (ZAP) ---
     - name: Execute ZAP Baseline DAST Scan
-      uses: zaproxy/action-baseline@v0.30.0
+      uses: zaproxy/action-baseline@v0.15.0
       with:
         target: 'http://localhost:5000/'
         fail_action: false
