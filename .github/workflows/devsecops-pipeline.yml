@@ -1,0 +1,153 @@
+name: Flask DevSecOps Pipeline (Phases 1-4)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Set strict permissions required by CodeQL and Trivy to write to the Security Tab
+permissions:
+  actions: read
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  # ==========================================
+  # PHASE 1 & 2: CODE VALIDATION & SAST / SCA
+  # ==========================================
+  test-and-sast:
+    name: Code Quality, Unit Tests & SAST
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository code
+      uses: actions/checkout@v4
+
+    # --- Phase 1: Local Code Check / Linting ---
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 pytest -r requirements.txt
+
+    - name: Lint code with Flake8
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    # --- Phase 2: Static Security Analysis (GHAS CodeQL) ---
+    - name: Initialize CodeQL (SAST)
+      uses: github/codeql-action/init@v3
+      with:
+        languages: 'python'
+
+    - name: Run Pytest (Unit Testing)
+      env:
+        PYTHONPATH: .
+      run: |
+        pytest
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+
+
+  # ==========================================
+  # PHASE 3: ARTIFACT PACKAGING & SECURITY (Trivy)
+  # ==========================================
+  build-and-package-scan:
+    name: Container Build & Image Scan
+    needs: test-and-sast # Guardrail: Block if code testing or SAST fails
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Lowercase repo name for Docker compatibility
+      run: |
+        echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+    - name: Build Docker image (Local Only for Testing)
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false # Do not push to registry until container scanning passes!
+        tags: ghcr.io/${{ env.IMAGE_NAME }}:pipeline-test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    # --- Phase 3: Container OS & Dependency Scan (Trivy) ---
+    - name: Scan Docker Image with Trivy
+      uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # Secure Commit SHA pinning
+      with:
+        image-ref: 'ghcr.io/${{ env.IMAGE_NAME }}:pipeline-test'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+
+    - name: Upload Trivy results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    # --- If Trivy is clean, safely push the image to production registry ---
+    - name: Push Verified Docker Image
+      uses: docker/build-push-action@v5
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ env.IMAGE_NAME }}:latest
+          ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+
+  # ==========================================
+  # PHASE 4: DYNAMIC EXPLOIT TESTING (ZAP DAST)
+  # ==========================================
+  dynamic-security-testing:
+    name: Dynamic App Security Testing (DAST)
+    needs: build-and-package-scan # Guardrail: Block if container has CVEs
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository code
+      uses: actions/checkout@v4
+
+    - name: Lowercase repo name
+      run: |
+        echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+    # Pull down the verified image we just pushed in the previous job
+    - name: Pull Verified Image
+      run: |
+        docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+        docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest
+
+    # Spin up the Flask environment locally in the background
+    - name: Spin up Flask App in Isolated Container
+      run: |
+        docker run -d -p 5000:5000 --name dynamic-flask-target ghcr.io/${{ env.IMAGE_NAME }}:latest
+        sleep 5 # Allow Flask time to initialize database connections/routes
+
+    # --- Phase 4: Attack the live target (ZAP) ---
+    - name: Execute ZAP Baseline DAST Scan
+      uses: zaproxy/action-baseline@v0.12.0
+      with:
+        target: 'http://localhost:5000/'
+        fail_action: true # Break pipeline if vulnerabilities are discovered
+        token: ${{ secrets.GITHUB_TOKEN }}
