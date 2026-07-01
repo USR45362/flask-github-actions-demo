@@ -11,4 +11,4 @@ def multiply(x, y):
     return jsonify({"result": x * y})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
