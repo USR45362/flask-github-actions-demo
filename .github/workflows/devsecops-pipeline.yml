@@ -100,6 +100,12 @@ jobs:
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
 
+    - name: Save Raw SARIF File to Actions
+      uses: actions/upload-artifact@v4
+      with:
+        name: raw-trivy-sarif-report
+        path: trivy-results.sarif
+
     - name: Upload Trivy results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3
       if: always()
